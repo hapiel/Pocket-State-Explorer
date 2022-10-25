@@ -4,14 +4,22 @@ Q: Why does no debounce seem needed?
 Q: What's the easiest way to short pin 5? Don't want to wait 5 seconds every time
 Q: Is there a way to prevent plugging in and out all the time? Maybe a programmer board with a switch for the power and data lines?
 
+DATA SAVING:
+don't use sin() or pow()
+don't use strip.colorHSV
+don't use floats
+don't use map()
+
+Also no fastled, no digispark keyboard (for debugging)
+
 FUNCTIONALITY:
 
 PLAYING WITH STATES:
-State is represented with (teal) leds
+DONE State is represented with (teal) leds
 When button is pressed, new ball appears on led (magenta?), all other balls turn (blue)?
 One by one the pixels shift to the left, turning (teal) again.
 
-give 0 a bouncing animation, going in and out of brightness.
+DONE give 0 a bouncing animation, going in and out of brightness.
 When holding a new number, it jumps on the press, but the shifting animation won't start untill the button release
 
 Show error (red) when illegal move is attempted:
@@ -44,7 +52,6 @@ Set animation speed
 #include <TinyWireM.h>
 #include <Adafruit_NeoPixel.h>
 #include "TinyMCP23008.h"
-
 
 #define PIN_PIX  1
 #define NUM_PIX 10
@@ -92,6 +99,13 @@ void setup() {
 
 void loop() {
   buttonState = (mcp.readGPIO() << 2) | (!digitalRead(4) << 1) | digitalRead(3) ;
+
+  // TODO this effect is too small when at higher brightness, needs to be multiplied by "brightness setting". Other solutions seem too expensive?
+  // up and down value, between 0 and 16/2
+  uint8_t fader = (millis() / 32) % 16;
+  if (fader > 8) fader = 16 - fader;
+
+  uint32_t cBounce = strip.Color(0, fader, br);
   
   // loop all pixels & buttons
   for (byte i = 0; i < NUM_PIX; i++) {
@@ -118,10 +132,17 @@ void loop() {
       ssState = setBalls(i);
     }
 
-
+    // if state is 1
     if ((ssState >> i) & 1){
-      strip.setPixelColor(i, cState);
-    } else {
+      // if 0, use bounce animation instead
+      if (i == 0){
+        strip.setPixelColor(0, cBounce);
+      } 
+      else {
+        strip.setPixelColor(i, cState);
+      }
+    } 
+    else {
       strip.setPixelColor(i, cBlack);
     }
   }
@@ -130,6 +151,8 @@ void loop() {
   strip.show();
   pButtonState = buttonState;
 }
+
+
 
 // button handling
 bool bDown(uint8_t button){
