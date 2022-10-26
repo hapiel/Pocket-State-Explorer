@@ -1,13 +1,7 @@
 /*
-
-DATA SAVING:
-don't use sin() or pow()
-don't use strip.colorHSV
-don't use floats
-don't use map()
-could remove strip.brightness() to gain 5%?
-
-Also no fastled, no digispark keyboard (for debugging)
+Software for the Pocket State Explorer by Sylvain Garnavault & Daniel Simu.
+Based on Digispark Attiny85
+This code is written by Daniel Simu, 2022
 
 FUNCTIONALITY:
 
@@ -40,13 +34,23 @@ MENU:
 Hold 0 and 9 to enter menu
 Set brightness (store in EEPROM?)
 Set animation speed
+Switch to single color mode
+
+DATA SAVING:
+don't use sin() or pow()
+don't use strip.colorHSV
+don't use floats
+don't use map() REWROTE, USE map8()
+could remove strip.brightness() to gain 5%?
+
+Also no fastled, no digispark keyboard (for debugging)
 
 */
 
 #include <avr/power.h>
 #include <TinyWireM.h>
 #include <Adafruit_NeoPixel.h> // older version from digispark? uses less storage..
-#include "TinyMCP23008.h"
+#include "TinyMCP23008.h" // custom library by Sylvain Garnavault
 
 #define PIN_PIX  1
 #define NUM_PIX 10
@@ -67,18 +71,18 @@ uint8_t balls = 3; // amount of balls or objects
 
 uint8_t ballPos[NUM_BALLS] = {0, 1, 2, 255, 255, 255, 255, 255, 255};
 uint32_t cBalls[NUM_BALLS]={
-  strip.Color(128, 0, 0),
-  strip.Color(128, 50, 0),
-  strip.Color(85, 100, 0),
+  strip.Color(164, 0, 0),
+  strip.Color(164, 64, 0),
+  strip.Color(108, 128, 0),
 
-  strip.Color(0, 128, 0),
-  strip.Color(0, 100, 100),
+  strip.Color(0, 164, 0),
+  strip.Color(0, 128, 128),
 
-  strip.Color(0, 0, 150),
-  strip.Color(85, 0, 128),
-  strip.Color(128, 0, 40),
+  strip.Color(0, 0, 192),
+  strip.Color(108, 0, 164),
+  strip.Color(164, 0, 52),
 
-  strip.Color(80, 80, 80)
+  strip.Color(102, 102, 102)
 };
 
 uint32_t cState = strip.Color(0, 128, 128);
@@ -91,7 +95,7 @@ void setup() {
   strip.begin();
   strip.show();
 
-  strip.setBrightness(18); // this function costs 4% memory, could possibly be removed.
+  strip.setBrightness(14); // this function costs 4% memory, could possibly be removed.
 
   pinMode(3, INPUT);
   pinMode(4, INPUT);
@@ -115,6 +119,10 @@ void setup() {
 
 void loop() {
   buttonState = (mcp.readGPIO() << 2) | (!digitalRead(4) << 1) | digitalRead(3) ;
+
+  // for fading animations, producing a pingpong effect
+  uint8_t fader = (millis() / 3) % 256;
+  if (fader > 128) fader = 256 - fader;
   
   // loop all pixels & buttons
   for (uint8_t i = 0; i < NUM_PIX; i++) {
@@ -122,6 +130,11 @@ void loop() {
     strip.setPixelColor(i, cBlack);
 
     if (bPressed(i)){
+
+      // if still shifting, shift all before proceeding
+      while (shiftState < NUM_PIX){
+        shiftNext();
+      }
 
       holdTime[i] = millis();
 
@@ -167,29 +180,43 @@ void loop() {
     // check all the balls to see which is at current position
     for (uint8_t j = 0; j < NUM_BALLS; j++) {
       if (ballPos[j] == i){
-        strip.setPixelColor(i, cBalls[j]);
+
+        // if 0, then bounce
+        if (i == 0){
+
+          uint8_t cComponents[3];
+
+          // somehow using 2 loops compiles faster than combining these loops?
+
+          // split color into components
+          for (uint8_t k = 0; k < 3; k++) {
+            cComponents[k] = cBalls[j] >> k*8;
+          }
+
+          // substract mapped fader from components
+          for (uint8_t k = 0; k < 3; k++) {
+            cComponents[k] -= map8(fader,0,128,0,(cComponents[k]));
+          }
+
+          // rebuild the color
+          uint32_t cBounceColor = strip.Color(cComponents[2],cComponents[1], cComponents[0]);
+
+          strip.setPixelColor(i, cBounceColor);
+        }
+        // else set color without animation
+        else {
+          strip.setPixelColor(i, cBalls[j]);
+        }
+
       }
     }
   }
 
-  // animation has not finished
+  // shift animation has not finished
   if (shiftState < NUM_PIX){
-
-    // animation speed
+    // if shiftSpeed time has passed, shift
     if (millis() - shiftTime > shiftSpeed){
-      
-      for (uint8_t i = 0; i < NUM_BALLS; i++) {
-        
-        if (ballPos[i] == shiftState){
-          // shift the ball
-          ballPos[i] -= 1;
-          // wait until new time
-          shiftTime = millis();
-          
-        }
-      }
-      // update state
-      shiftState += 1;
+      shiftNext();
     }
   }
 
@@ -231,9 +258,19 @@ void setBalls(uint8_t balls){
   }
 }
 
-// Set bit n to 1:
-// ssState |= 1 << n;
-// Set bit n to 0:
-// ssState &= ~(1 << n);
-// Flip bit n:
-// ssState ^= 1 << n ;
+void shiftNext(){
+  for (uint8_t i = 0; i < NUM_BALLS; i++) {   
+    if (ballPos[i] == shiftState){
+      // shift the ball
+      ballPos[i] -= 1;
+      // prepare the new time
+      shiftTime = millis();
+    }
+  }
+  // update state
+  shiftState += 1;
+}
+
+uint8_t map8(uint8_t x, uint8_t in_min, uint8_t in_max, uint8_t out_min, uint8_t out_max) {
+  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
