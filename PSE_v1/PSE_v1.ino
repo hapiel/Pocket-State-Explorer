@@ -9,6 +9,7 @@ don't use sin() or pow()
 don't use strip.colorHSV
 don't use floats
 don't use map()
+could remove strip.brightness() to gain 5%?
 
 Also no fastled, no digispark keyboard (for debugging)
 
@@ -16,11 +17,8 @@ FUNCTIONALITY:
 
 PLAYING WITH STATES:
 DONE State is represented with (teal) leds
-When button is pressed, new ball appears on led (magenta?), all other balls turn (blue)?
-One by one the pixels shift to the left, turning (teal) again.
-
+DONE One by one the pixels shift to the left
 DONE give 0 a bouncing animation, going in and out of brightness.
-When holding a new number, it jumps on the press, but the shifting animation won't start untill the button release
 
 Show error (red) when illegal move is attempted:
 flash 0 when a 0 is required
@@ -28,7 +26,8 @@ flash number if there already is an object.
 On release only, need to allow for holds...
 
 GO TO GROUND STATE:
-Hold down a button to set the amount of balls.
+DONE Hold down a button to set the amount of balls.
+Store ball count in EEPROM
 
 ANIMATE:
 Hold down 0
@@ -50,7 +49,7 @@ Set animation speed
 
 #include <avr/power.h>
 #include <TinyWireM.h>
-#include <Adafruit_NeoPixel.h>
+#include <Adafruit_NeoPixel.h> // older version from digispark? uses less storage..
 #include "TinyMCP23008.h"
 
 #define PIN_PIX  1
@@ -59,22 +58,29 @@ Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUM_PIX, PIN_PIX, NEO_GRB + NEO_KHZ8
 
 TinyMCP23008 mcp;
 
-uint8_t br = 10; //brightness
 uint16_t pButtonState;
 uint16_t buttonState;
+
 uint32_t holdTime[NUM_PIX];
+uint32_t shiftTime;
 
 uint8_t balls = 3; // amount of balls or objects
-uint16_t ssState = 0b0000000111; ; 
+uint16_t ssState = 0b0000000111; 
+uint16_t ssStateDisplayOld = 0b0000000111; 
+uint16_t ssStateDisplayNew = 0b0000000111; 
 
-uint32_t cState = strip.Color(0, br, br);
+uint32_t cState = strip.Color(0, 128, 128);
 uint32_t cBlack = strip.Color(0, 0, 0);
+uint32_t cDebug = strip.Color(0, 128, 0);
+uint32_t cWhite = strip.Color(128,128,128);
 
 void setup() {
   delay(5500); // wait for boot thingy
   strip.begin();
   strip.show();
+
   ssState = setBalls(balls);
+  strip.setBrightness(18); // this function costs 4% memory, could possibly be removed.
 
   pinMode(3, INPUT);
   pinMode(4, INPUT);
@@ -86,12 +92,12 @@ void setup() {
     mcp.pullUp(j, HIGH);
   }
 
-  changeColor(0, br, 0);
+  changeColor(0, 255, 0);
   delay(100);
 
   pButtonState = 0b1111111111;
 
-  changeColor(0, 0, br);
+  changeColor(0, 0, 255);
   delay(100);
   changeColor(0, 0, 0);
 
@@ -100,15 +106,16 @@ void setup() {
 void loop() {
   buttonState = (mcp.readGPIO() << 2) | (!digitalRead(4) << 1) | digitalRead(3) ;
 
-  // TODO this effect is too small when at higher brightness, needs to be multiplied by "brightness setting". Other solutions seem too expensive?
-  // up and down value, between 0 and 16/2
-  uint8_t fader = (millis() / 32) % 16;
-  if (fader > 8) fader = 16 - fader;
+  // up and down value, between 0 and 128
+  uint8_t fader = (millis() / 3) % 256;
+  if (fader > 128) fader = 256 - fader;
 
-  uint32_t cBounce = strip.Color(0, fader, br);
+  uint32_t cBounce = strip.Color(0, 16 + fader, 16 + fader);
   
   // loop all pixels & buttons
-  for (byte i = 0; i < NUM_PIX; i++) {
+  for (uint8_t i = 0; i < NUM_PIX; i++) {
+
+    strip.setPixelColor(i, cBlack);
 
     if (bPressed(i)){
 
@@ -116,8 +123,17 @@ void loop() {
 
       // if empty space AND (0 is lit OR 0 is pressed)
       if (!(ssState >> i & 1) && ((ssState & 1) || i == 0)) {
+
+        // state will be updated!
+        ssStateDisplayOld = ssState;
+        ssStateDisplayOld &= ~1; // remove led 0
+        ssStateDisplayNew = 0;
+        if (i > 0) {
+          ssStateDisplayOld |= 1 << i; // add new led;
+        }
+        shiftTime = millis();
         
-        ssState |= 1 << i; // turn on led i
+        ssState |= 1 << i; // turn on bit i
         ssState >>= 1; // shift left
       }
 
@@ -130,20 +146,53 @@ void loop() {
     // if not 0, currently held, longer than 1s
     if (i > 0 && holdTime[i] != 0 && millis() - holdTime[i] > 1000 ){
       ssState = setBalls(i);
+      ssStateDisplayNew = ssState;
+      for (uint8_t i = 0; i < NUM_PIX; i++){
+        if ((ssState >> i) & 1){
+          strip.setPixelColor(i, cWhite);
+        }
+      }
     }
 
-    // if state is 1
-    if ((ssState >> i) & 1){
-      // if 0, use bounce animation instead
-      if (i == 0){
-        strip.setPixelColor(0, cBounce);
+    if (ssState == ssStateDisplayNew){
+
+      // if state is 1
+      if ((ssState >> i) & 1){
+        // if 0, use bounce animation instead
+        if (i == 0){
+          strip.setPixelColor(0, cBounce);
+        } 
+        else {
+          strip.setPixelColor(i, cState);
+        }
       } 
-      else {
+      
+    } 
+  }
+
+  // animation has not finished
+  if (ssState != ssStateDisplayNew){
+
+    // animation speed
+    if (millis() - shiftTime > 150){
+      shiftTime = millis();
+      for (uint8_t i = 1; i < NUM_PIX; i++) {
+
+        if ((ssStateDisplayOld >> i) & 1 ) {
+
+          // remove from old
+          ssStateDisplayOld &= ~(1 << i);
+          // add to new, one shifted
+          ssStateDisplayNew |= 1 << (i - 1);
+          break;
+        }
+      }
+    }
+
+    for (uint8_t i = 0; i < NUM_PIX; i++) {
+      if ((ssStateDisplayOld >> i) & 1 || (ssStateDisplayNew >> i) & 1 ){
         strip.setPixelColor(i, cState);
       }
-    } 
-    else {
-      strip.setPixelColor(i, cBlack);
     }
   }
 
@@ -213,6 +262,8 @@ uint16_t setBalls(uint8_t balls){
 }
 
 // Set bit n to 1:
-// ssState = (1 << n) | ssState;
+// ssState |= 1 << n;
+// Set bit n to 0:
+// ssState &= ~(1 << n);
 // Flip bit n:
 // ssState ^= 1 << n ;
