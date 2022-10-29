@@ -7,12 +7,13 @@ FUNCTIONALITY:
 
 PLAYING WITH STATES:
 DONE State is represented with colored leds
-DONE One by one the pixels shift to the left
+DONE One by one the pixels shift to the left, starting once buttons are released
 DONE give 0 a bouncing animation, going in and out of brightness.
 
 DONE Show error (red) when illegal move is attempted:
 DONE flash 0 when a 0 is required
 DONE flash number if there already is an object. 
+
 
 GO TO GROUND STATE:
 DONE Hold down a button to set the amount of balls.
@@ -22,7 +23,7 @@ RUN:
 // PROBLEM: What if you don't want to do a 0 before you run? try button release instead of button press?
 Hold down 0
 The pattern will be animated on screen from the last time you were in this particular state.
-Shows error if no loop was created since the last ball count reset.
+DONE Shows error if no loop was created since the last ball count reset.
 
 FREE MODE:
 Hold down button 9 to enter free mode. Works like normal state mode, 
@@ -40,7 +41,6 @@ OTHER IDEAS:
 Undo? which button to use for this?
 Could we have a fancy transition finder?
 Siteswap generator?
-
 
 BOOT ANIMATION:
 Some kind of fancy rainbow?
@@ -68,7 +68,10 @@ Also no fastled, no digispark keyboard (for debugging)
 
 #define PIN_PIX  1
 #define NUM_PIX 10
-#define MAX_BALLS 9
+#define MAX_BALLS 8
+#define HOLD_SET_BALLS 1300
+#define HOLD_OTHER 1000
+
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUM_PIX, PIN_PIX, NEO_GRB + NEO_KHZ800);
 
 TinyMCP23008 mcp;
@@ -124,8 +127,8 @@ uint32_t cBalls[MAX_BALLS]={
   strip.Color(164, 64, 0),  // 5 orange
   strip.Color(108, 128, 0), // 6 yellow
 
-  strip.Color(0, 164, 0),   // 7 green
-  strip.Color(0, 164, 40)   // 8 turquoise
+  strip.Color(0, 164, 0)   // 7 green
+  // strip.Color(0, 164, 40)   // 8 turquoise
 };
 
 
@@ -175,6 +178,8 @@ void loop() {
   bool flicker = (millis() / 100) % 2;
 
   bool runError = false; // used if no such state in history
+
+  bool anyDown = false; // used to hold back the shifting animation
   
   if (currentMode == explore){
 
@@ -183,6 +188,10 @@ void loop() {
 
       // turn all pixels off
       strip.setPixelColor(i, 0);
+
+      if (bDown(i)){
+        anyDown = true;
+      }
 
       if (bPressed(i)){
 
@@ -193,64 +202,59 @@ void loop() {
           shiftNext();
         }
 
-        uint8_t zeroBall = 255;
         bool collision = false;
 
-        // which ball is the 0 position ball?
+        // check for collision
         for (uint8_t j = 0; j < MAX_BALLS; j++) {
-          if (ballPos[j] == 0){
-            zeroBall = j;
-          }
           if (ballPos[j] == i){
             collision = true;
             errorPixel = i;
           }
         }
 
-        // CORRECT MOVE if empty space AND (0 is lit OR 0 is pressed), AND NOT (not button 0, but 0 is down too)
-        if (!collision && (zeroBall != 255 || i == 0) && !(i !=0 && bDown(0))) {
-
-          // we're gonna start shifting!
-          shiftTime = millis();
-          shiftState = 0;
-          
-          // add new balls
-          ballPos[zeroBall] = i;
-
-
-          // load current state and add new one to history
-          uint16_t newState = stateHist[stateHistPos];
-          newState |= 1 << i; // turn on bit i
-          newState >>= 1; // shift left
-          addState(newState);
-
-        }
-
         // if 0 is off and 0 is not pressed
-        if (zeroBall == 255 && i != 0){
+        if (zeroBall() == 255 && i != 0){
           errorPixel = 0;
         }
 
+        // CORRECT MOVE if empty space AND 0 is lit, AND NOT 0 is down too
+        if (!collision && zeroBall() != 255  && !bDown(0)) {
+          placeBall(zeroBall(), i);
+
+        }
       }
 
       if (bReleased(i)) {
+
+        // handle 0 on release to allow for separate function on button hold
+        if (i == 0 && holdTime[0] < HOLD_OTHER){
+
+          // if no ball at pos zero
+          if (zeroBall() == 255){
+            // add no ball, but shift
+            placeBall(255, 0);
+            shiftTime -= shiftSpeed; // start animation immediately
+
+          }
+        }
+
         holdTime[i] = 0;
         errorPixel = 255;
       }
 
       // if not 0, currently held, longer than 1.3s
-      if (i > 0 && holdTime[i] != 0 && millis() - holdTime[i] > 1300 ){
+      if (i > 0 && holdTime[i] != 0 && millis() - holdTime[i] > HOLD_SET_BALLS ){
         setBalls(i);
         errorPixel = 255;
 
-        // Flash cyan
+        // Flash yellow
         for (uint8_t j = 0; j < i; j++){ 
-          strip.setPixelColor(j, cBalls[0]); 
+          strip.setPixelColor(j, cBalls[6]); 
         }
       }
 
       // if 0 is held longer than 1s
-      if (i == 0 && holdTime[i] != 0 && millis() - holdTime[i] > 1000){
+      if (i == 0 && holdTime[i] != 0 && millis() - holdTime[i] > HOLD_OTHER ){
 
         // if 9 also down
         if (bDown(9)){
@@ -307,12 +311,11 @@ void loop() {
         }
       }
 
-      
     }
 
-    // shift animation has not finished
-    if (shiftState < NUM_PIX){
-      // if shiftSpeed time has passed, shift
+    // shift animation has not finished AND no button held down
+    if (shiftState < NUM_PIX && !anyDown){
+      // if shiftSpeed stime has passed, shift
       if (millis() - shiftTime > shiftSpeed){
         shiftNext();
       }
@@ -330,7 +333,7 @@ void loop() {
 
   if (currentMode == run){
     // TODO:
-    // PROBLEM: What if you don't want to do a 0 before you run? try button release instead of button press?
+
     // runstart, show all current items as green
     // remain in normal mode, but ignore normal key action
     // key action takes you back to explore mode
@@ -395,6 +398,8 @@ void changeColor(uint8_t r, uint8_t g, uint8_t b) {
 }
 
 void setBalls(uint8_t balls){
+
+  shiftState = 255;
   
   for (uint8_t i = 0; i < MAX_BALLS; i++){
     if (i < balls){
@@ -411,34 +416,14 @@ void setBalls(uint8_t balls){
     stateHist[i] = 0;
   }
 
-  // TODO: Refactor this part
-  if (balls == 1){
-    addState(1);
+  // create new ground state
+  uint16_t groundState = 0;
+
+  for (uint8_t i = 0; i < balls; i++){
+    groundState <<= 1; // shift left
+    groundState |= 1; // turn on first bit
   }
-  if (balls == 2){
-    addState(3);
-  }
-  if (balls == 3){
-    addState(7);
-  }
-  if (balls == 4){
-    addState(15);
-  }
-  if (balls == 5){
-    addState(31);
-  }
-  if (balls == 6){
-    addState(63);
-  }
-  if (balls == 7){
-    addState(127);
-  }
-  if (balls == 8){
-    addState(255);
-  }
-  if (balls == 9){
-    addState(511);
-  }
+  addState(groundState);
 
 }
 
@@ -478,4 +463,32 @@ uint8_t findState(uint16_t state){
   }
 
   return pos;
+}
+
+void placeBall(uint8_t ballNr, uint8_t pos){
+  // ballNr = 255 to shift but not place
+
+  // we're gonna start shifting!
+  shiftTime = millis();
+  shiftState = 0;
+
+  // add new balls
+  if (ballNr != 255){
+    ballPos[ballNr] = pos;
+  }
+
+  // load current state and add new one to history
+  uint16_t newState = stateHist[stateHistPos];
+  newState |= 1 << pos; // turn on bit i
+  newState >>= 1; // shift left
+  addState(newState);
+}
+
+uint8_t zeroBall(){
+  for (uint8_t i = 0; i < MAX_BALLS; i++) {
+    if (ballPos[i] == 0){
+      return i;
+    }
+  }
+  return 255;
 }
